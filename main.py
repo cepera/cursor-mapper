@@ -8,18 +8,19 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget
 
 # Global variables for rectangle parameters
 outline_width = 2
-outline_color = Qt.white
+outline_color = Qt.red  # Change color to red
 move_step = 10  # Step size for movement
 config_file = "rect_config.ini"  # Configuration file path
 
 class GameOverlay(QWidget):
-    def __init__(self, rect_x, rect_y, rect_width=100, rect_height=50):
+    def __init__(self, rect_x, rect_y, rect_width=100, rect_height=50, config_section="rectA"):
         super().__init__()
 
         self.rect_x = rect_x
         self.rect_y = rect_y
         self.rect_width = rect_width  # Rectangle width
         self.rect_height = rect_height  # Rectangle height
+        self.config_section = config_section  # Unique configuration section for this overlay
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -42,7 +43,7 @@ class GameOverlay(QWidget):
         painter.drawRect(self.rect())
 
         # Draw the rectangle outline
-        painter.setPen(QColor(outline_color))
+        painter.setPen(QColor(outline_color))  # Use red color
         painter.setBrush(QBrush(QColor(0, 0, 0, 0)))
         painter.drawRect(self.rect_x, self.rect_y, self.rect_width, self.rect_height)
 
@@ -50,34 +51,37 @@ class GameOverlay(QWidget):
         self.rect_x += dx
         self.rect_y += dy
         self.update()
-        save_rect_config(self.rect_x, self.rect_y, self.rect_width, self.rect_height)
+        save_rect_config(self.config_section, self.rect_x, self.rect_y, self.rect_width, self.rect_height)
 
     def resize_rectangle(self, dw, dh):
         self.rect_width = max(10, self.rect_width + dw)  # Ensure minimum width
         self.rect_height = max(5, self.rect_height + dh)  # Ensure minimum height
         self.update()
-        save_rect_config(self.rect_x, self.rect_y, self.rect_width, self.rect_height)
+        save_rect_config(self.config_section, self.rect_x, self.rect_y, self.rect_width, self.rect_height)
 
-def save_rect_config(x, y, width, height, screen_index=0):
+def save_rect_config(section, x, y, width, height, screen_index=1):
     config = configparser.ConfigParser()
-    config['rectA'] = {
+    config.read(config_file)
+    if section not in config:
+        config[section] = {}
+    config[section].update({
         'x': str(x),
         'y': str(y),
         'width': str(width),
         'height': str(height),
         'screen': str(screen_index)
-    }
+    })
     with open(config_file, 'w') as configfile:
         config.write(configfile)
 
-def load_rect_config():
+def load_rect_config(section):
     config = configparser.ConfigParser()
-    if config.read(config_file) and 'rectA' in config:
-        x = int(config['rectA'].get('x', 0))
-        y = int(config['rectA'].get('y', 0))
-        width = int(config['rectA'].get('width', 100))
-        height = int(config['rectA'].get('height', 50))
-        screen_index = int(config['rectA'].get('screen', 0))
+    if config.read(config_file) and section in config:
+        x = int(config[section].get('x', 0))
+        y = int(config[section].get('y', 0))
+        width = int(config[section].get('width', 100))
+        height = int(config[section].get('height', 50))
+        screen_index = int(config[section].get('screen', 0))
         return x, y, width, height, screen_index
     return 0, 0, 100, 50, 0  # Default values
 
@@ -114,7 +118,7 @@ def main():
     print(f"Available screens: {len(screens)}")
 
     # Load rectangle configuration or use defaults
-    rect_x, rect_y, rect_width, rect_height, screen_index = load_rect_config()
+    rect_x, rect_y, rect_width, rect_height, screen_index = load_rect_config("rectA")
 
     # Validate screen index
     if screen_index >= len(screens):
@@ -127,7 +131,7 @@ def main():
     rect_y = max(0, min(rect_y, screen_geometry.height() - rect_height))
 
     # Create the first overlay
-    overlay = GameOverlay(rect_x, rect_y, rect_width, rect_height)
+    overlay = GameOverlay(rect_x, rect_y, rect_width, rect_height, config_section="rectA")
     overlay.setGeometry(screen_geometry)  # Explicitly set the overlay to match the selected screen's geometry
     overlays = [overlay]
 
