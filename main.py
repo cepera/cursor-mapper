@@ -24,7 +24,8 @@ class GameOverlay(QWidget):
         self.rect_height = rect_height  # Rectangle height
         self.config_section = config_section  # Unique configuration section for this overlay
         self.outline_color = outline_color  # Outline color for the rectangle
-        self.draw_green = False  # Flag to indicate whether to draw the green rectangle
+        self.dot_x = None  # Dot x-coordinate
+        self.dot_y = None  # Dot y-coordinate
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -38,9 +39,10 @@ class GameOverlay(QWidget):
         self.setGeometry(0, 0, screen_width, screen_height)  # Set the overlay size to match the screen
         self.show()
 
-    def draw_green_rectangle(self):
-        """Set a flag to draw a green rectangle and trigger a repaint."""
-        self.draw_green = True
+    def draw_dot(self, x, y):
+        """Set the dot position and trigger a repaint."""
+        self.dot_x = x
+        self.dot_y = y
         self.update()
 
     def paintEvent(self, event):
@@ -57,19 +59,10 @@ class GameOverlay(QWidget):
         painter.drawRect(self.rect_x, self.rect_y, self.rect_width, self.rect_height)
 
         # Draw the dot if it exists
-        if hasattr(self, 'dot_x') and hasattr(self, 'dot_y'):
+        if self.dot_x is not None and self.dot_y is not None:
             painter.setBrush(QBrush(Qt.black))  # Black dot
             painter.setPen(Qt.NoPen)
-            painter.drawEllipse(self.dot_x - 5, self.dot_y - 5, 10, 10)  # Dot size 10x10
-
-        # Draw the green rectangle if the flag is set
-        if self.draw_green:
-            painter.setBrush(QBrush(QColor(0, 255, 0, 127)))  # Semi-transparent green
-            painter.setPen(Qt.NoPen)
-            painter.drawRect(
-                self.rect_x + 10, self.rect_y + 10,
-                self.rect_width - 20, self.rect_height - 20
-            )
+            painter.drawEllipse(int(self.dot_x) - 5, int(self.dot_y) - 5, 10, 10)  # Convert to int
         painter.end()
 
     def move_rectangle(self, dx, dy=0):
@@ -83,11 +76,6 @@ class GameOverlay(QWidget):
         self.rect_height = max(5, self.rect_height + dh)  # Ensure minimum height
         self.update()
         save_rect_config(self.config_section, self.rect_x, self.rect_y, self.rect_width, self.rect_height)
-
-    def draw_dot(self, x, y):
-        self.dot_x = x
-        self.dot_y = y
-        self.update()
 
 def save_rect_config(section, x, y, width, height, screen_index=1):
     config = configparser.ConfigParser()
@@ -119,6 +107,42 @@ def is_cursor_inside_rect(rect_x, rect_y, rect_width, rect_height):
     cursor = wintypes.POINT()
     ctypes.windll.user32.GetCursorPos(ctypes.byref(cursor))
     return rect_x <= cursor.x <= rect_x + rect_width and rect_y <= cursor.y <= rect_y + rect_height, cursor.x, cursor.y
+
+def track_cursor_position():
+    """Return the cursor position adjusted for the screen and the screen index."""
+    cursor = wintypes.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(cursor))
+    screens = QApplication.screens()
+    for i, screen in enumerate(screens):
+        geometry = screen.geometry()
+        if geometry.contains(cursor.x, cursor.y):
+            adjusted_x = cursor.x - geometry.x()  # Adjust x-coordinate relative to the screen
+            adjusted_y = cursor.y - geometry.y()  # Adjust y-coordinate relative to the screen
+            return adjusted_x, adjusted_y, i
+    return cursor.x, cursor.y, -1  # Return -1 for screen if not found
+
+def is_cursor_inside_rectA_and_draw_in_rectB(overlayA, overlayB):
+    """Check if the cursor is inside rectA and draw a corresponding dot in rectB."""
+    adjusted_x, adjusted_y, screen_index = track_cursor_position()
+    if screen_index == -1:
+        print("Cursor is not on any screen.")
+        overlayB.draw_dot(None, None)  # Clear the dot in rectB
+        return
+
+    # print(f"Cursor position: ({adjusted_x}, {adjusted_y}), Screen: {screen_index}")
+
+    if overlayA.rect_x <= adjusted_x <= overlayA.rect_x + overlayA.rect_width and \
+       overlayA.rect_y <= adjusted_y <= overlayA.rect_y + overlayA.rect_height:
+        print(f"Cursor is inside rectA on screen {screen_index}.")
+        # Calculate scaled position in rectB
+        relative_x = (adjusted_x - overlayA.rect_x) / overlayA.rect_width
+        relative_y = (adjusted_y - overlayA.rect_y) / overlayA.rect_height
+        dot_x = overlayB.rect_x + relative_x * overlayB.rect_width
+        dot_y = overlayB.rect_y + relative_y * overlayB.rect_height
+        overlayB.draw_dot(dot_x, dot_y)
+    else:
+        print(f"Cursor is outside rectA on screen {screen_index}.")
+        overlayB.draw_dot(None, None)  # Clear the dot in rectB
 
 def handle_input(overlays, input_done_event):
     try:
@@ -215,7 +239,7 @@ def main():
 
     timer = QTimer()
     timer.timeout.connect(check_input_done)
-    timer.start(100)  # Check every 100 milliseconds
+    timer.start(40)  # Check every 100 milliseconds
 
     # Wait for the QTimer to finish using a QEventLoop
     loop = QEventLoop()
@@ -224,26 +248,13 @@ def main():
 
     print("QTimer has finished.")
 
-    # Draw something green inside rectB
-    overlayB.draw_green_rectangle()
-
-    # Track cursor position and print it every second
-    def track_cursor_position():
-        cursor = wintypes.POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(cursor))
-        screens = QApplication.screens()
-        for i, screen in enumerate(screens):
-            geometry = screen.geometry()
-            if geometry.contains(cursor.x, cursor.y):
-                adjusted_x = cursor.x - geometry.x()  # Adjust x-coordinate relative to the screen
-                print(f"Cursor position: ({adjusted_x}, {cursor.y}), Screen: {i}")
-                break
-        else:
-            print(f"Cursor position: ({cursor.x}, {cursor.y}), Screen: Not found")
+    # Check if cursor is inside rectA and draw in rectB every second
+    def check_cursor_in_rectA_and_draw_in_rectB():
+        is_cursor_inside_rectA_and_draw_in_rectB(overlayA, overlayB)
 
     cursor_timer = QTimer()
-    cursor_timer.timeout.connect(track_cursor_position)
-    cursor_timer.start(1000)  # Check every 1 second
+    cursor_timer.timeout.connect(check_cursor_in_rectA_and_draw_in_rectB)
+    cursor_timer.start(30)
 
     # Start the QApplication event loop
     sys.exit(app.exec_())
