@@ -2,18 +2,19 @@ import sys
 import msvcrt
 import threading
 import configparser
+import ctypes
+from ctypes import wintypes
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPainter, QBrush, QColor
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget
 
 # Global variables for rectangle parameters
 outline_width = 2
-outline_color = Qt.red  # Change color to red
 move_step = 10  # Step size for movement
 config_file = "rect_config.ini"  # Configuration file path
 
 class GameOverlay(QWidget):
-    def __init__(self, rect_x, rect_y, rect_width=100, rect_height=50, config_section="rectA"):
+    def __init__(self, rect_x, rect_y, rect_width=100, rect_height=50, config_section="rectA", outline_color=Qt.red):
         super().__init__()
 
         self.rect_x = rect_x
@@ -21,6 +22,7 @@ class GameOverlay(QWidget):
         self.rect_width = rect_width  # Rectangle width
         self.rect_height = rect_height  # Rectangle height
         self.config_section = config_section  # Unique configuration section for this overlay
+        self.outline_color = outline_color  # Outline color for the rectangle
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -43,9 +45,15 @@ class GameOverlay(QWidget):
         painter.drawRect(self.rect())
 
         # Draw the rectangle outline
-        painter.setPen(QColor(outline_color))  # Use red color
+        painter.setPen(QColor(self.outline_color))  # Use the instance's outline color
         painter.setBrush(QBrush(QColor(0, 0, 0, 0)))
         painter.drawRect(self.rect_x, self.rect_y, self.rect_width, self.rect_height)
+
+        # Draw the dot if it exists
+        if hasattr(self, 'dot_x') and hasattr(self, 'dot_y'):
+            painter.setBrush(QBrush(Qt.black))  # Black dot
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(self.dot_x - 5, self.dot_y - 5, 10, 10)  # Dot size 10x10
 
     def move_rectangle(self, dx, dy=0):
         self.rect_x += dx
@@ -58,6 +66,11 @@ class GameOverlay(QWidget):
         self.rect_height = max(5, self.rect_height + dh)  # Ensure minimum height
         self.update()
         save_rect_config(self.config_section, self.rect_x, self.rect_y, self.rect_width, self.rect_height)
+
+    def draw_dot(self, x, y):
+        self.dot_x = x
+        self.dot_y = y
+        self.update()
 
 def save_rect_config(section, x, y, width, height, screen_index=1):
     config = configparser.ConfigParser()
@@ -85,30 +98,60 @@ def load_rect_config(section):
         return x, y, width, height, screen_index
     return 0, 0, 100, 50, 0  # Default values
 
+def is_cursor_inside_rect(rect_x, rect_y, rect_width, rect_height):
+    cursor = wintypes.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(cursor))
+    return rect_x <= cursor.x <= rect_x + rect_width and rect_y <= cursor.y <= rect_y + rect_height, cursor.x, cursor.y
+
 def handle_input(overlays):
     try:
         screens = QApplication.screens()  # Get all available screens
         print(f"Number of screens: {len(screens)}")
+        current_overlay_index = 0
+        print(f"Set {overlays[current_overlay_index].config_section}...")
+
         while True:
             if msvcrt.kbhit():
                 key = msvcrt.getch().decode('utf-8').lower()
                 if key == 'a':  # Move left
-                    overlays[0].move_rectangle(-move_step)
+                    overlays[current_overlay_index].move_rectangle(-move_step)
                 elif key == 'd':  # Move right
-                    overlays[0].move_rectangle(move_step)
+                    overlays[current_overlay_index].move_rectangle(move_step)
                 elif key == 'w':  # Move up
-                    overlays[0].move_rectangle(0, -move_step)
+                    overlays[current_overlay_index].move_rectangle(0, -move_step)
                 elif key == 's':  # Move down
-                    overlays[0].move_rectangle(0, move_step)
+                    overlays[current_overlay_index].move_rectangle(0, move_step)
                 elif key == '+':  # Increase rectangle size
-                    overlays[0].resize_rectangle(10, 5)
+                    overlays[current_overlay_index].resize_rectangle(10, 5)
                 elif key == '-':  # Decrease rectangle size
-                    overlays[0].resize_rectangle(-10, -5)
+                    overlays[current_overlay_index].resize_rectangle(-10, -5)
+                elif key == '\r':  # Enter key
+                    current_overlay_index += 1
+                    if current_overlay_index < len(overlays):
+                        print(f"Set {overlays[current_overlay_index].config_section}...")
+                    else:
+                        print("All set!")
+                        break
     except KeyboardInterrupt:
         print("Exiting...")
         for overlay in overlays:
             overlay.close()
         sys.exit(0)  # Exit immediately on Ctrl+C
+
+def track_cursor_and_draw_dot(overlayA, overlayB):
+    def update_dot():
+        inside, cursor_x, cursor_y = is_cursor_inside_rect(
+            overlayA.rect_x, overlayA.rect_y, overlayA.rect_width, overlayA.rect_height
+        )
+        if inside:
+            print(f"Yes, position: ({cursor_x}, {cursor_y})")
+        else:
+            print("No")
+
+    print("Starting cursor tracking...")
+    timer = QTimer()
+    timer.timeout.connect(update_dot)
+    timer.start(16)  # Check cursor position approximately every 16 milliseconds (about 60 FPS)
 
 def main():
     app = QApplication(sys.argv)
@@ -117,30 +160,44 @@ def main():
     screens = QApplication.screens()
     print(f"Available screens: {len(screens)}")
 
-    # Load rectangle configuration or use defaults
-    rect_x, rect_y, rect_width, rect_height, screen_index = load_rect_config("rectA")
+    # Load rectangle configurations or use defaults
+    rectA_x, rectA_y, rectA_width, rectA_height, rectA_screen_index = load_rect_config("rectA")
+    rectB_x, rectB_y, rectB_width, rectB_height, rectB_screen_index = load_rect_config("rectB")
 
-    # Validate screen index
-    if screen_index >= len(screens):
-        print(f"Screen {screen_index} is not available. Defaulting to primary screen.")
-        screen_index = 0
+    # Validate screen indices
+    if rectA_screen_index >= len(screens):
+        print(f"Screen {rectA_screen_index} for rectA is not available. Defaulting to primary screen.")
+        rectA_screen_index = 0
+    if rectB_screen_index >= len(screens):
+        print(f"Screen {rectB_screen_index} for rectB is not available. Defaulting to primary screen.")
+        rectB_screen_index = 0
 
-    # Adjust rectangle position to fit within the selected screen
-    screen_geometry = screens[screen_index].geometry()
-    rect_x = max(0, min(rect_x, screen_geometry.width() - rect_width))
-    rect_y = max(0, min(rect_y, screen_geometry.height() - rect_height))
+    # Adjust rectangle positions to fit within the selected screens
+    rectA_geometry = screens[rectA_screen_index].geometry()
+    rectA_x = max(0, min(rectA_x, rectA_geometry.width() - rectA_width))
+    rectA_y = max(0, min(rectA_y, rectA_geometry.height() - rectA_height))
 
-    # Create the first overlay
-    overlay = GameOverlay(rect_x, rect_y, rect_width, rect_height, config_section="rectA")
-    overlay.setGeometry(screen_geometry)  # Explicitly set the overlay to match the selected screen's geometry
-    overlays = [overlay]
+    rectB_geometry = screens[rectB_screen_index].geometry()
+    rectB_x = max(0, min(rectB_x, rectB_geometry.width() - rectB_width))
+    rectB_y = max(0, min(rectB_y, rectB_geometry.height() - rectB_height))
 
-    timer = QTimer()
-    timer.timeout.connect(overlays[0].update)
-    timer.start(16)  # Update the overlay approximately every 16 milliseconds (about 60 FPS)
+    # Create the overlays
+    overlayA = GameOverlay(rectA_x, rectA_y, rectA_width, rectA_height, config_section="rectA", outline_color=Qt.red)
+    overlayA.setGeometry(rectA_geometry)
 
+    overlayB = GameOverlay(rectB_x, rectB_y, rectB_width, rectB_height, config_section="rectB", outline_color=Qt.blue)
+    overlayB.setGeometry(rectB_geometry)
+
+    overlays = [overlayA, overlayB]
+
+    # Start the handle_input thread
     input_thread = threading.Thread(target=handle_input, args=(overlays,), daemon=True)
     input_thread.start()
+
+
+    print("Starting cursor tracking...")
+    # Start the cursor tracking and dot drawing logic
+    track_cursor_and_draw_dot(overlayA, overlayB)
 
     sys.exit(app.exec_())
 
