@@ -1,12 +1,13 @@
 import sys
-import msvcrt
 import threading
 import configparser
 import ctypes
+import msvcrt
+import signal
 from ctypes import wintypes
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QEventLoop
 from PyQt5.QtGui import QPainter, QBrush, QColor
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget
+from PyQt5.QtWidgets import QApplication, QWidget
 
 # Global variables for rectangle parameters
 outline_width = 2
@@ -23,6 +24,7 @@ class GameOverlay(QWidget):
         self.rect_height = rect_height  # Rectangle height
         self.config_section = config_section  # Unique configuration section for this overlay
         self.outline_color = outline_color  # Outline color for the rectangle
+        self.draw_green = False  # Flag to indicate whether to draw the green rectangle
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -35,6 +37,11 @@ class GameOverlay(QWidget):
 
         self.setGeometry(0, 0, screen_width, screen_height)  # Set the overlay size to match the screen
         self.show()
+
+    def draw_green_rectangle(self):
+        """Set a flag to draw a green rectangle and trigger a repaint."""
+        self.draw_green = True
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -54,6 +61,16 @@ class GameOverlay(QWidget):
             painter.setBrush(QBrush(Qt.black))  # Black dot
             painter.setPen(Qt.NoPen)
             painter.drawEllipse(self.dot_x - 5, self.dot_y - 5, 10, 10)  # Dot size 10x10
+
+        # Draw the green rectangle if the flag is set
+        if self.draw_green:
+            painter.setBrush(QBrush(QColor(0, 255, 0, 127)))  # Semi-transparent green
+            painter.setPen(Qt.NoPen)
+            painter.drawRect(
+                self.rect_x + 10, self.rect_y + 10,
+                self.rect_width - 20, self.rect_height - 20
+            )
+        painter.end()
 
     def move_rectangle(self, dx, dy=0):
         self.rect_x += dx
@@ -103,7 +120,7 @@ def is_cursor_inside_rect(rect_x, rect_y, rect_width, rect_height):
     ctypes.windll.user32.GetCursorPos(ctypes.byref(cursor))
     return rect_x <= cursor.x <= rect_x + rect_width and rect_y <= cursor.y <= rect_y + rect_height, cursor.x, cursor.y
 
-def handle_input(overlays):
+def handle_input(overlays, input_done_event):
     try:
         screens = QApplication.screens()  # Get all available screens
         print(f"Number of screens: {len(screens)}")
@@ -130,7 +147,8 @@ def handle_input(overlays):
                     if current_overlay_index < len(overlays):
                         print(f"Set {overlays[current_overlay_index].config_section}...")
                     else:
-                        print("All set!")
+                        print("All input done! Rectangles are still visible for further actions.")
+                        input_done_event.set()  # Signal that input is done
                         break
     except KeyboardInterrupt:
         print("Exiting...")
@@ -138,23 +156,15 @@ def handle_input(overlays):
             overlay.close()
         sys.exit(0)  # Exit immediately on Ctrl+C
 
-def track_cursor_and_draw_dot(overlayA, overlayB):
-    def update_dot():
-        inside, cursor_x, cursor_y = is_cursor_inside_rect(
-            overlayA.rect_x, overlayA.rect_y, overlayA.rect_width, overlayA.rect_height
-        )
-        if inside:
-            print(f"Yes, position: ({cursor_x}, {cursor_y})")
-        else:
-            print("No")
-
-    print("Starting cursor tracking...")
-    timer = QTimer()
-    timer.timeout.connect(update_dot)
-    timer.start(16)  # Check cursor position approximately every 16 milliseconds (about 60 FPS)
-
 def main():
     app = QApplication(sys.argv)
+
+    # Handle KeyboardInterrupt (Ctrl+C) gracefully
+    def handle_interrupt(signal, frame):
+        print("Exiting application...")
+        app.quit()
+
+    signal.signal(signal.SIGINT, handle_interrupt)
 
     # Get all available screens
     screens = QApplication.screens()
@@ -190,15 +200,34 @@ def main():
 
     overlays = [overlayA, overlayB]
 
+    # Event to signal when input is done
+    input_done_event = threading.Event()
+
     # Start the handle_input thread
-    input_thread = threading.Thread(target=handle_input, args=(overlays,), daemon=True)
+    input_thread = threading.Thread(target=handle_input, args=(overlays, input_done_event), daemon=True)
     input_thread.start()
 
+    # Use a QTimer to periodically check if the input thread has finished
+    def check_input_done():
+        if input_done_event.is_set():
+            print("All input done! Rectangles are still visible for further actions.")
+            timer.stop()  # Stop the timer once input is done
 
-    print("Starting cursor tracking...")
-    # Start the cursor tracking and dot drawing logic
-    track_cursor_and_draw_dot(overlayA, overlayB)
+    timer = QTimer()
+    timer.timeout.connect(check_input_done)
+    timer.start(100)  # Check every 100 milliseconds
 
+    # Wait for the QTimer to finish using a QEventLoop
+    loop = QEventLoop()
+    timer.timeout.connect(lambda: loop.quit() if not timer.isActive() else None)
+    loop.exec_()
+
+    print("QTimer has finished.")
+
+    # Draw something green inside rectB
+    overlayB.draw_green_rectangle()
+
+    # Start the QApplication event loop
     sys.exit(app.exec_())
 
 if __name__ == '__main__':
