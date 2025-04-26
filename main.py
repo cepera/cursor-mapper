@@ -227,6 +227,24 @@ def main():
     # Draw something green inside rectB
     overlayB.draw_green_rectangle()
 
+    # Track cursor position and print it every second
+    def track_cursor_position():
+        cursor = wintypes.POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(cursor))
+        screens = QApplication.screens()
+        for i, screen in enumerate(screens):
+            geometry = screen.geometry()
+            if geometry.contains(cursor.x, cursor.y):
+                adjusted_x = cursor.x - geometry.x()  # Adjust x-coordinate relative to the screen
+                print(f"Cursor position: ({adjusted_x}, {cursor.y}), Screen: {i}")
+                break
+        else:
+            print(f"Cursor position: ({cursor.x}, {cursor.y}), Screen: Not found")
+
+    cursor_timer = QTimer()
+    cursor_timer.timeout.connect(track_cursor_position)
+    cursor_timer.start(1000)  # Check every 1 second
+
     # Start the QApplication event loop
     sys.exit(app.exec_())
 
