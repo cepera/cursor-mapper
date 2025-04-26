@@ -3,8 +3,9 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPainter, QBrush, QColor
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget
 
-# Global variables for circle parameters
-circle_radius = 50
+# Global variables for rectangle parameters
+rect_width = 100
+rect_height = 50
 outline_width = 2
 outline_color = Qt.white
 
@@ -32,15 +33,14 @@ class GameOverlay(QWidget):
         painter.setBrush(QBrush(QColor(0, 0, 0, 0)))
         painter.drawRect(self.rect())
 
-        # Calculate the circle's center position
-        circle_center_x = self.width() // 2
-        circle_center_y = self.height() // 2
+        # Calculate the rectangle's top-left position
+        rect_top_left_x = (self.width() - rect_width) // 2
+        rect_top_left_y = (self.height() - rect_height) // 2
 
-        # Draw the circle outline
+        # Draw the rectangle outline
         painter.setPen(QColor(outline_color))
         painter.setBrush(QBrush(QColor(0, 0, 0, 0)))
-        painter.drawEllipse(circle_center_x - circle_radius, circle_center_y - circle_radius,
-                            circle_radius * 2, circle_radius * 2)
+        painter.drawRect(rect_top_left_x, rect_top_left_y, rect_width, rect_height)
 
 def main():
     app = QApplication(sys.argv)
