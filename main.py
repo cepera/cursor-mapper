@@ -5,13 +5,14 @@ import ctypes
 import msvcrt
 import signal
 from ctypes import wintypes
-from PyQt5.QtCore import Qt, QTimer, QEventLoop
-from PyQt5.QtGui import QPainter, QBrush, QColor
+from PyQt5.QtCore import Qt, QTimer, QEventLoop, QPoint
+from PyQt5.QtGui import QPainter, QBrush, QColor, QPen
 from PyQt5.QtWidgets import QApplication, QWidget
 
 # Global variables for rectangle parameters
 outline_width = 2
 move_step = 10  # Step size for movement
+resize_step = 5  # Step size for resizing height and width
 config_file = "rect_config.ini"  # Configuration file path
 
 class GameOverlay(QWidget):
@@ -39,8 +40,8 @@ class GameOverlay(QWidget):
         self.setGeometry(0, 0, screen_width, screen_height)  # Set the overlay size to match the screen
         self.show()
 
-    def draw_dot(self, x, y):
-        """Set the dot position and trigger a repaint."""
+    def draw_cursor(self, x, y):
+        """Set the cursor position and trigger a repaint."""
         self.dot_x = x
         self.dot_y = y
         self.update()
@@ -58,11 +59,22 @@ class GameOverlay(QWidget):
         painter.setBrush(QBrush(QColor(0, 0, 0, 0)))
         painter.drawRect(self.rect_x, self.rect_y, self.rect_width, self.rect_height)
 
-        # Draw the dot if it exists
+        # Draw the cursor arrow if it exists
+        painter.setPen(QPen(QColor(Qt.black), 1.5))  # Black arrow lines with thickness 2
+        painter.setBrush(QBrush(Qt.white))  # Fill the triangle with white color
+
         if self.dot_x is not None and self.dot_y is not None:
-            painter.setBrush(QBrush(Qt.black))  # Black dot
-            painter.setPen(Qt.NoPen)
-            painter.drawEllipse(int(self.dot_x) - 5, int(self.dot_y) - 5, 10, 10)  # Convert to int
+            # Define the points of the triangle
+            tip = QPoint(int(self.dot_x), int(self.dot_y))  # Tip point
+            bottom = QPoint(int(self.dot_x), int(self.dot_y) + 10)  # Bottom point
+            bottom_right = QPoint(int(self.dot_x) + 10, int(self.dot_y) + 10)  # Bottom-right point
+
+            # Draw the filled triangle
+            painter.drawPolygon(tip, bottom, bottom_right)
+
+            # Draw the lines for the arrow
+            painter.drawLine(tip, bottom)  # Vertical line
+            painter.drawLine(tip, bottom_right)  # Diagonal line
         painter.end()
 
     def move_rectangle(self, dx, dy=0):
@@ -122,27 +134,23 @@ def track_cursor_position():
     return cursor.x, cursor.y, -1  # Return -1 for screen if not found
 
 def is_cursor_inside_rectA_and_draw_in_rectB(overlayA, overlayB):
-    """Check if the cursor is inside rectA and draw a corresponding dot in rectB."""
+    """Check if the cursor is inside rectA and draw a corresponding cursor in rectB."""
     adjusted_x, adjusted_y, screen_index = track_cursor_position()
     if screen_index == -1:
         print("Cursor is not on any screen.")
-        overlayB.draw_dot(None, None)  # Clear the dot in rectB
+        overlayB.draw_cursor(None, None)  # Clear the cursor in rectB
         return
-
-    # print(f"Cursor position: ({adjusted_x}, {adjusted_y}), Screen: {screen_index}")
 
     if overlayA.rect_x <= adjusted_x <= overlayA.rect_x + overlayA.rect_width and \
        overlayA.rect_y <= adjusted_y <= overlayA.rect_y + overlayA.rect_height:
-        print(f"Cursor is inside rectA on screen {screen_index}.")
         # Calculate scaled position in rectB
         relative_x = (adjusted_x - overlayA.rect_x) / overlayA.rect_width
         relative_y = (adjusted_y - overlayA.rect_y) / overlayA.rect_height
-        dot_x = overlayB.rect_x + relative_x * overlayB.rect_width
-        dot_y = overlayB.rect_y + relative_y * overlayB.rect_height
-        overlayB.draw_dot(dot_x, dot_y)
+        cursor_x = overlayB.rect_x + relative_x * overlayB.rect_width
+        cursor_y = overlayB.rect_y + relative_y * overlayB.rect_height
+        overlayB.draw_cursor(cursor_x, cursor_y)
     else:
-        print(f"Cursor is outside rectA on screen {screen_index}.")
-        overlayB.draw_dot(None, None)  # Clear the dot in rectB
+        overlayB.draw_cursor(None, None)  # Clear the cursor in rectB
 
 def handle_input(overlays, input_done_event):
     try:
@@ -162,10 +170,14 @@ def handle_input(overlays, input_done_event):
                     overlays[current_overlay_index].move_rectangle(0, -move_step)
                 elif key == 's':  # Move down
                     overlays[current_overlay_index].move_rectangle(0, move_step)
-                elif key == '+':  # Increase rectangle size
-                    overlays[current_overlay_index].resize_rectangle(10, 5)
-                elif key == '-':  # Decrease rectangle size
-                    overlays[current_overlay_index].resize_rectangle(-10, -5)
+                elif key == 'i':  # Increase height
+                    overlays[current_overlay_index].resize_rectangle(0, resize_step)
+                elif key == 'k':  # Decrease height
+                    overlays[current_overlay_index].resize_rectangle(0, -resize_step)
+                elif key == 'j':  # Decrease width
+                    overlays[current_overlay_index].resize_rectangle(-resize_step, 0)
+                elif key == 'l':  # Increase width
+                    overlays[current_overlay_index].resize_rectangle(resize_step, 0)
                 elif key == '\r':  # Enter key
                     current_overlay_index += 1
                     if current_overlay_index < len(overlays):
