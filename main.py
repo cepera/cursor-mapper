@@ -5,39 +5,73 @@ import ctypes
 import msvcrt
 import signal
 from ctypes import wintypes
-from PyQt5.QtCore import Qt, QTimer, QEventLoop, QPoint
+from PyQt5.QtCore import Qt, QTimer, QEventLoop, QPoint, QObject, pyqtSignal
 from PyQt5.QtGui import QPainter, QBrush, QColor, QPen
 from PyQt5.QtWidgets import QApplication, QWidget
 
 # Global variables for rectangle parameters
 outline_width = 2
-move_step = 10  # Step size for movement
+move_step = 1  # Step size for movement
 resize_step = 5  # Step size for resizing height and width
 config_file = "rect_config.ini"  # Configuration file path
 
+class OverlayManager(QObject):
+    """Manages overlay creation and switching from main thread."""
+    recreate_overlay = pyqtSignal(int, str, object)  # index, config_section, outline_color
+
+    def __init__(self):
+        super().__init__()
+        self.overlays = []
+        self.recreate_overlay.connect(self.handle_recreate_overlay)
+
+    def set_overlays(self, overlays):
+        self.overlays = overlays
+
+    def handle_recreate_overlay(self, index, config_section, outline_color):
+        """Handle overlay recreation on main thread."""
+        if index < len(self.overlays):
+            # Close old overlay
+            old_overlay = self.overlays[index]
+            old_overlay.close()
+            old_overlay.deleteLater()
+
+            # Create new overlay
+            new_overlay = GameOverlay(config_section, outline_color)
+            self.overlays[index] = new_overlay
+            print(f"Recreated {config_section} overlay")
+
+# Global overlay manager instance
+overlay_manager = OverlayManager()
+
 class GameOverlay(QWidget):
-    def __init__(self, rect_x, rect_y, rect_width=100, rect_height=50, config_section="rectA", outline_color=Qt.red):
+    def __init__(self, config_section="rectA", outline_color=Qt.red):
         super().__init__()
 
-        self.rect_x = rect_x
-        self.rect_y = rect_y
-        self.rect_width = rect_width  # Rectangle width
-        self.rect_height = rect_height  # Rectangle height
         self.config_section = config_section  # Unique configuration section for this overlay
         self.outline_color = outline_color  # Outline color for the rectangle
+
+        # Load configuration from file
+        self.rect_x, self.rect_y, self.rect_width, self.rect_height, self.screen_index = load_rect_config(config_section)
+
+        # Get all available screens and validate screen index
+        screens = QApplication.screens()
+        self.screen_index = validate_screen_index(self.screen_index, config_section, screens)
+
+        # Get the target screen geometry
+        screen_geometry = screens[self.screen_index].geometry()
+
+        # Adjust rectangle positions to fit within the selected screen
+        self.rect_x = max(0, min(self.rect_x, screen_geometry.width() - self.rect_width))
+        self.rect_y = max(0, min(self.rect_y, screen_geometry.height() - self.rect_height))
+
         self.dot_x = None  # Dot x-coordinate
         self.dot_y = None  # Dot y-coordinate
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        screen = QApplication.primaryScreen()
-        screen_geometry = screen.geometry()
-
-        screen_width = screen_geometry.width()
-        screen_height = screen_geometry.height()
-
-        self.setGeometry(0, 0, screen_width, screen_height)  # Set the overlay size to match the screen
+        # Set the overlay geometry to match the target screen
+        self.setGeometry(screen_geometry)
         self.show()
 
     def draw_cursor(self, x, y):
@@ -81,13 +115,13 @@ class GameOverlay(QWidget):
         self.rect_x += dx
         self.rect_y += dy
         self.update()
-        save_rect_config(self.config_section, self.rect_x, self.rect_y, self.rect_width, self.rect_height)
+        save_rect_config(self.config_section, self.rect_x, self.rect_y, self.rect_width, self.rect_height, self.screen_index)
 
     def resize_rectangle(self, dw, dh):
         self.rect_width = max(10, self.rect_width + dw)  # Ensure minimum width
         self.rect_height = max(5, self.rect_height + dh)  # Ensure minimum height
         self.update()
-        save_rect_config(self.config_section, self.rect_x, self.rect_y, self.rect_width, self.rect_height)
+        save_rect_config(self.config_section, self.rect_x, self.rect_y, self.rect_width, self.rect_height, self.screen_index)
 
 def save_rect_config(section, x, y, width, height, screen_index=1):
     config = configparser.ConfigParser()
@@ -115,6 +149,13 @@ def load_rect_config(section):
         return x, y, width, height, screen_index
     return 0, 0, 100, 50, 0  # Default values
 
+def validate_screen_index(screen_index, section_name, available_screens):
+    """Validate screen index and return 0 with warning if screen doesn't exist."""
+    if screen_index >= len(available_screens):
+        print(f"Screen {screen_index} for {section_name} is not available. Defaulting to primary screen.")
+        return 0
+    return screen_index
+
 def is_cursor_inside_rect(rect_x, rect_y, rect_width, rect_height):
     cursor = wintypes.POINT()
     ctypes.windll.user32.GetCursorPos(ctypes.byref(cursor))
@@ -139,6 +180,11 @@ def is_cursor_inside_rectA_and_draw_in_rectB(overlayA, overlayB):
     if screen_index == -1:
         print("Cursor is not on any screen.")
         overlayB.draw_cursor(None, None)  # Clear the cursor in rectB
+        return
+
+    # Check if cursor is on overlayA's screen
+    if screen_index != overlayA.screen_index:
+        overlayB.draw_cursor(None, None)  # Clear the cursor in rectB if not on correct screen
         return
 
     if overlayA.rect_x <= adjusted_x <= overlayA.rect_x + overlayA.rect_width and \
@@ -178,6 +224,26 @@ def handle_input(overlays, input_done_event):
                     overlays[current_overlay_index].resize_rectangle(-resize_step, 0)
                 elif key == 'l':  # Increase width
                     overlays[current_overlay_index].resize_rectangle(resize_step, 0)
+                elif key.isdigit():  # Number keys 0-9 for screen switching
+                    screen_num = int(key)
+                    if screen_num < len(screens):
+                        current_overlay = overlays[current_overlay_index]
+
+                        # Store overlay info before closing
+                        config_section = current_overlay.config_section
+                        outline_color = current_overlay.outline_color
+
+                        # Save current position/size with new screen index
+                        save_rect_config(config_section, current_overlay.rect_x, current_overlay.rect_y, 
+                                       current_overlay.rect_width, current_overlay.rect_height, screen_num)
+
+                        print(f"Moving {config_section} to screen {screen_num}")
+
+                        # Signal main thread to recreate overlay
+                        overlay_manager.recreate_overlay.emit(current_overlay_index, config_section, outline_color)
+
+                    else:
+                        print(f"Screen {screen_num} is not available. Available screens: 0-{len(screens)-1}")
                 elif key == '\r':  # Enter key
                     current_overlay_index += 1
                     if current_overlay_index < len(overlays):
@@ -206,35 +272,14 @@ def main():
     screens = QApplication.screens()
     print(f"Available screens: {len(screens)}")
 
-    # Load rectangle configurations or use defaults
-    rectA_x, rectA_y, rectA_width, rectA_height, rectA_screen_index = load_rect_config("rectA")
-    rectB_x, rectB_y, rectB_width, rectB_height, rectB_screen_index = load_rect_config("rectB")
-
-    # Validate screen indices
-    if rectA_screen_index >= len(screens):
-        print(f"Screen {rectA_screen_index} for rectA is not available. Defaulting to primary screen.")
-        rectA_screen_index = 0
-    if rectB_screen_index >= len(screens):
-        print(f"Screen {rectB_screen_index} for rectB is not available. Defaulting to primary screen.")
-        rectB_screen_index = 0
-
-    # Adjust rectangle positions to fit within the selected screens
-    rectA_geometry = screens[rectA_screen_index].geometry()
-    rectA_x = max(0, min(rectA_x, rectA_geometry.width() - rectA_width))
-    rectA_y = max(0, min(rectA_y, rectA_geometry.height() - rectA_height))
-
-    rectB_geometry = screens[rectB_screen_index].geometry()
-    rectB_x = max(0, min(rectB_x, rectB_geometry.width() - rectB_width))
-    rectB_y = max(0, min(rectB_y, rectB_geometry.height() - rectB_height))
-
     # Create the overlays
-    overlayA = GameOverlay(rectA_x, rectA_y, rectA_width, rectA_height, config_section="rectA", outline_color=Qt.red)
-    overlayA.setGeometry(rectA_geometry)
-
-    overlayB = GameOverlay(rectB_x, rectB_y, rectB_width, rectB_height, config_section="rectB", outline_color=Qt.blue)
-    overlayB.setGeometry(rectB_geometry)
+    overlayA = GameOverlay("rectA", Qt.red)
+    overlayB = GameOverlay("rectB", Qt.blue)
 
     overlays = [overlayA, overlayB]
+
+    # Set up overlay manager
+    overlay_manager.set_overlays(overlays)
 
     # Event to signal when input is done
     input_done_event = threading.Event()
