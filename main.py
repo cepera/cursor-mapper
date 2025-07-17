@@ -307,7 +307,10 @@ def main():
 
     # Check if cursor is inside rectA and draw in rectB every second
     def check_cursor_in_rectA_and_draw_in_rectB():
-        is_cursor_inside_rectA_and_draw_in_rectB(overlayA, overlayB)
+        # Get current overlays from overlay manager to avoid using deleted objects
+        current_overlays = overlay_manager.overlays
+        if len(current_overlays) >= 2:
+            is_cursor_inside_rectA_and_draw_in_rectB(current_overlays[0], current_overlays[1])
 
     cursor_timer = QTimer()
     cursor_timer.timeout.connect(check_cursor_in_rectA_and_draw_in_rectB)
